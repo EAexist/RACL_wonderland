@@ -67,7 +67,9 @@ class MODEL(object):
             self.drop_block3 = DropBlock2D(keep_prob=self.keep_prob2, block_size=3)
 
             self.bert_input_ids = tf.placeholder(shape=[None, self.opt.max_sentence_len], dtype=tf.int32, name="input_ids")
+            self.bert_input_ids_us = tf.placeholder(shape=[None, self.opt.max_sentence_len], dtype=tf.int32, name="input_ids_us")
             self.bert_input_mask = tf.placeholder(shape=[None, self.opt.max_sentence_len], dtype=tf.int32, name="input_mask")
+            self.bert_input_mask_us = tf.placeholder(shape=[None, self.opt.max_sentence_len], dtype=tf.int32, name="input_mask_us")            
             self.bert_segment_ids = tf.placeholder(shape=[None, self.opt.max_sentence_len], dtype=tf.int32, name="segment_ids")
 
 
@@ -395,6 +397,7 @@ class MODEL(object):
                           sentiment_acc_list[min_dev_index],
                           sentiment_f1_list[min_dev_index], ABSA_f1_list[min_dev_index]))
 
+
     def get_batch_data(self, dataset, batch_size, keep_prob1, keep_prob2, is_training=False, is_shuffle=False):
         length = len(dataset[0])
         all_index = np.arange(length)
@@ -403,7 +406,16 @@ class MODEL(object):
         decay_step = int(length / batch_size) + (1 if length % batch_size else 0)
         for i in tqdm(range(int(length / batch_size) + (1 if length % batch_size else 0))):
             index = all_index[i * batch_size:(i + 1) * batch_size]
-            feed_dict = {
+            if is_training:
+                us_split = i * batch_size + int(batch_size*self.opt.sp_ratio)
+                us_index = all_index[us_split:(i + 1) * batch_size]
+                feed_dict = {
+                    self.bert_input_ids_us: dataset[6][us_index],
+                    self.bert_input_mask_us: dataset[7][us_index]
+                }                
+                index = all_index[i * batch_size:us_split]
+            
+            feed_dict.update({
                 self.aspect_y: dataset[0][index],
                 self.opinion_y: dataset[1][index],
                 self.sentiment_y: dataset[2][index],
@@ -411,11 +423,14 @@ class MODEL(object):
                 self.senti_mask: dataset[4][index],
                 self.position: dataset[5][index],
                 self.bert_input_ids: dataset[6][index],
+                #self.bert_input_ids_us: dataset[6][us_index],
                 self.bert_input_mask: dataset[7][index],
+                #self.bert_input_mask_us: dataset[7][us_index],                
                 self.bert_segment_ids: dataset[8][index],
                 self.keep_prob1: keep_prob1,
                 self.keep_prob2: keep_prob2,
                 self.is_training: is_training,
                 self.decay_step: decay_step
-            }
+            })
+
             yield feed_dict, len(index)

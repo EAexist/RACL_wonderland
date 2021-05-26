@@ -10,20 +10,20 @@ from tf_slim.layers import layers
 # from tensorflow.contrib import layers
 
 # class MODEL(object):
-# def __init__(self,
+#   def __init__(self,
 #       opt: namespace of parameters & paths, 
 #       word_embedding : glove_embedding.npy, 
 #       domain_embedding : domain_embedding.npy,
 #       word_dict : word2id.txt(dictionary)):
 #
-# def RACL(self, inputs, position_att):
+#   def RACL(self, inputs, position_att):
 #
-# def run(self):
+#   def run(self):
+#
+#   def get_batch_data(self, dataset, batch_size, keep_prob1, keep_prob2, dataset_unsup, dataset_aug, is_training=False, is_shuffle=False):
 # 
+#   def get_batch_data_test(self, dataset, batch_size, keep_prob1, keep_prob2, is_training=False, is_shuffle=False):
 #
-#
-#
-# def get_batch_data(self, dataset, batch_size, keep_prob1, keep_prob2, is_training=False, is_shuffle=False):
 class MODEL(object):
 
     def __init__(self, opt, word_embedding, domain_embedding, word_dict):
@@ -58,12 +58,12 @@ class MODEL(object):
             self.logger.info('{:-^80}'.format('Parameters'))
             self.logger.info(info + '\n')
 
-        # 'embeddings/_' for tf operations within the scope 
+        # 'embeddings/_' for tf nodes within the scope 
         with tf.name_scope('embeddings'):
             self.word_embedding = tf.Variable(self.w2v, dtype=tf.float32, name='word_embedding', trainable=False)
             self.domain_embedding = tf.Variable(self.w2v_domain, dtype=tf.float32, name='domain_embedding', trainable=False)
 
-        # 'inputs/_' for tf operations within the scope 
+        # 'inputs/_' for tf nodes within the scope 
         with tf.name_scope('inputs'):
             self.x = tf.placeholder(tf.int32, [None, self.opt.max_sentence_len], name='x')
             self.aspect_y = tf.placeholder(tf.int32, [None, self.opt.max_sentence_len, self.opt.class_num], name='aspect_y')
@@ -79,8 +79,16 @@ class MODEL(object):
             self.drop_block2 = DropBlock2D(keep_prob=self.keep_prob2, block_size=3)
             self.drop_block3 = DropBlock2D(keep_prob=self.keep_prob2, block_size=3)
 
+            ##### Unsup #####
+            self.unsup = tf.placeholder(tf.int32, [None, self.opt.max_sentence_len], name='unsup') 
+            self.aug = tf.placeholder(tf.int32, [None, self.opt.max_sentence_len], name='aug')
+            self.unsup_mask = tf.placeholder(tf.float32, [None, self.opt.max_sentence_len], name='unsup_mask')
+            self.position_unsup = tf.placeholder(tf.float32, [None, self.opt.max_sentence_len, self.opt.max_sentence_len], name='position_att_unsup')
+            self.senti_mask_unsup = tf.placeholder(tf.float32, [None, self.opt.max_sentence_len], name='senti_mask_unsup')
+            
 
-    def RACL(self, inputs, position_att):
+
+    def RACL(self, inputs, position_att, word_mask):
         batch_size = tf.shape(inputs)[0] # shape(inputs) = batch_size*_
         inputs = tf.nn.dropout(inputs, keep_prob=self.keep_prob1)
 
@@ -88,8 +96,8 @@ class MODEL(object):
         inputs = tf.layers.conv1d(inputs, self.opt.emb_dim, 1, padding='SAME', activation=tf.nn.relu, name='inputs')
         inputs = tf.nn.dropout(inputs, keep_prob=self.keep_prob1)
 
-        mask256 = tf.tile(tf.expand_dims(self.word_mask, -1), [1, 1, self.opt.filter_num])
-        mask70 = tf.tile(tf.expand_dims(self.word_mask, 1), [1, self.opt.max_sentence_len, 1])
+        mask256 = tf.tile(tf.expand_dims(word_mask, -1), [1, 1, self.opt.filter_num])
+        mask70 = tf.tile(tf.expand_dims(word_mask, 1), [1, self.opt.max_sentence_len, 1])
 
         # Private Feature
         aspect_input, opinion_input, context_input = list(), list(), list()
@@ -102,7 +110,7 @@ class MODEL(object):
         # Hence, we augment it with a memory-like mechanism by updating the aspect query with the retrieved contexts.
         # Refer to https://www.aclweb.org/anthology/D16-1021/ for for more details about the memory network.
         query = list()
-        query.append(inputs)
+        query.append(inputs)        
 
         for hop in range(self.opt.hop_num):
             with tf.variable_scope('layers_{}'.format(hop)):
@@ -112,11 +120,11 @@ class MODEL(object):
 
                 # Relation R1
                 aspect_see_opinion = tf.matmul(tf.nn.l2_normalize(aspect_conv, -1), tf.nn.l2_normalize(opinion_conv, -1), adjoint_b=True)
-                aspect_att_opinion = softmask_2d(aspect_see_opinion, self.word_mask)
+                aspect_att_opinion = softmask_2d(aspect_see_opinion, word_mask)
                 aspect_inter = tf.concat([aspect_conv, tf.matmul(aspect_att_opinion, opinion_conv)], -1)
 
                 opinion_see_aspect = tf.matmul(tf.nn.l2_normalize(opinion_conv, -1), tf.nn.l2_normalize(aspect_conv, -1), adjoint_b=True)
-                opinion_att_aspect = softmask_2d(opinion_see_aspect, self.word_mask)
+                opinion_att_aspect = softmask_2d(opinion_see_aspect, word_mask)
                 opinion_inter = tf.concat([opinion_conv, tf.matmul(opinion_att_aspect, aspect_conv)], -1)
 
                 # AE & OE Prediction
@@ -132,10 +140,9 @@ class MODEL(object):
 
                 # SC Convolution
                 context_conv = tf.layers.conv1d(context_input[-1], self.opt.emb_dim, self.opt.kernel_size, padding='SAME', activation=tf.nn.relu, name='context_conv')
-
                 # SC Aspect-Context Attention
-                word_see_context = tf.matmul((query[-1]), tf.nn.l2_normalize(context_conv, -1), adjoint_b=True)  * position_att
-                word_att_context = softmask_2d(word_see_context, self.word_mask, scale=True)
+                word_see_context = tf.matmul((query[-1]), tf.nn.l2_normalize(context_conv, -1), adjoint_b=True) * position_att
+                word_att_context = softmask_2d(word_see_context, word_mask, scale=True)
 
                 # Relation R2 & R3
                 word_att_context += aspect_att_opinion + opinion_propagate
@@ -167,7 +174,15 @@ class MODEL(object):
 
         return aspect_prob, opinion_prob, sentiment_prob
 
+    def kl_for_log_probs(self, log_p, log_q):
+        p = tf.exp(log_p)
+        neg_ent = tf.reduce_sum(p * log_p, axis=-1)
+        neg_cross_ent = tf.reduce_sum(p * log_q, axis=-1)
+        kl = neg_ent - neg_cross_ent
+        return kl
+
     def run(self):
+        ### Supervised ###
         # Change the inputs to the embedding representation
         batch_size = tf.shape(self.x)[0]
         inputs_word = tf.nn.embedding_lookup(self.word_embedding, self.x) # 1. general embedding representation of input
@@ -175,7 +190,7 @@ class MODEL(object):
         inputs = tf.concat([inputs_word, inputs_domain], -1) # concate 1 and 2
 
         # Save results of RACL model
-        aspect_prob, opinion_prob, sentiment_prob = self.RACL(inputs, self.position) # RACL model
+        aspect_prob, opinion_prob, sentiment_prob = self.RACL(inputs, self.position, self.word_mask) # RACL model
         aspect_value = tf.nn.softmax(aspect_prob, -1)
         opinion_value = tf.nn.softmax(opinion_prob, -1)
         senti_value = tf.nn.softmax(sentiment_prob, -1)
@@ -194,27 +209,77 @@ class MODEL(object):
         # In training/validation, the sentiment masks are set to 1.0 only for the aspect terms.
         # In testing, the sentiment masks are set to 1.0 for all words (except padding ones).
         senti_mask = tf.tile(tf.expand_dims(self.senti_mask, -1), [1, 1, self.opt.class_num])
-
+        
         # Mask SC Probabilities
-        sentiment_prob = tf.reshape(tf.cast(senti_mask, tf.float32) * sentiment_prob, [-1, self.opt.class_num])
+        sentiment_prob = tf.reshape(tf.cast(senti_mask, tf.float32) * sentiment_prob, [-1, self.opt.class_num]) 
         sentiment_label = tf.reshape(self.sentiment_y, [-1, self.opt.class_num])
+
+        unsup_mask = tf.tile(tf.expand_dims(self.unsup_mask, -1), [1, 1, self.opt.class_num])
+        senti_mask_unsup = tf.tile(tf.expand_dims(self.senti_mask_unsup, -1), [1, 1, self.opt.class_num])      
+
+        ### Unsupervised ###
+        with tf.variable_scope('unsup'):        
+            # Change the inputs to the embedding representation
+            batch_size_us = tf.shape(self.unsup)[0]
+            inputs_word_us = tf.nn.embedding_lookup(self.word_embedding, self.unsup) # 1. general embedding representation of input
+            inputs_domain_us = tf.nn.embedding_lookup(self.domain_embedding, self.unsup) # 2. domain embedding representation of input
+            inputs_us = tf.stop_gradient(tf.concat([inputs_word_us, inputs_domain_us], -1)) # concate 1 and 2
+
+            # Save results of RACL model
+            ae_us, oe_us, sc_us = self.RACL(inputs_us, self.position_unsup, self.unsup_mask) # RACL model
+            # unsup_aev = tf.nn.softmax(unsup_ae, -1)
+            # unsup_oev = tf.nn.softmax(unsup_ae, -1)
+            # unsup_scv = tf.nn.softmax(unsup_ae, -1)
+
+            # AE & OE Regulation Loss
+            # reg_cost = tf.reduce_sum(tf.maximum(0., tf.reduce_sum(aspect_value[:,:,1:], -1) + tf.reduce_sum(opinion_value[:,:,1:], -1) - 1.)) / tf.reduce_sum(self.word_mask)
+
+            # Mask AE & OE Probabilities
+            ae_us = tf.reshape(unsup_mask * ae_us, [-1, self.opt.class_num])
+            # aspect_label = tf.reshape(self.aspect_y, [-1, self.opt.class_num])
+            oe_us = tf.reshape(unsup_mask * oe_us, [-1, self.opt.class_num])
+            # opinion_label = tf.reshape(self.opinion_y, [-1, self.opt.class_num])
+            sc_us = tf.reshape(tf.cast(senti_mask_unsup, tf.float32) * sc_us, [-1, self.opt.class_num]) 
+
+        ### Augmented ###
+        with tf.variable_scope('aug'):
+            # Change the inputs to the embedding representation
+            batch_size_aug = tf.shape(self.aug)[0]
+            inputs_word_aug = tf.nn.embedding_lookup(self.word_embedding, self.aug) # 1. general embedding representation of input
+            inputs_domain_aug = tf.nn.embedding_lookup(self.domain_embedding, self.aug) # 2. domain embedding representation of input
+            inputs_aug = tf.concat([inputs_word_aug, inputs_domain_aug], -1) # concate 1 and 2
+
+            # Save results of RACL model
+            ae_aug, oe_aug, sc_aug = self.RACL(inputs_aug, self.position_unsup, self.unsup_mask) # RACL model
+            # aug_aev = tf.nn.softmax(aug_ae, -1)
+            # aug_oev = tf.nn.softmax(aug_ae, -1)
+            # aug_scv = tf.nn.softmax(aug_ae, -1)
+
+            # AE & OE Regulation Loss
+            # reg_cost = tf.reduce_sum(tf.maximum(0., tf.reduce_sum(aspect_value[:,:,1:], -1) + tf.reduce_sum(opinion_value[:,:,1:], -1) - 1.)) / tf.reduce_sum(self.word_mask)
+
+            # Mask AE & OE Probabilities            
+            ae_aug = tf.reshape(unsup_mask * ae_aug, [-1, self.opt.class_num])
+            # aspect_label = tf.reshape(self.aspect_y, [-1, self.opt.class_num])
+            oe_aug = tf.reshape(unsup_mask * oe_aug, [-1, self.opt.class_num])
+            # opinion_label = tf.reshape(self.opinion_y, [-1, self.opt.class_num])
+                      
+            sc_aug = tf.reshape(tf.cast(senti_mask_unsup, tf.float32) * sc_aug, [-1, self.opt.class_num])
+
         # Compute loss
-        # Loss = aspect_ + opinion_ + sentiment_ + regularization weigth * regularization cost
-        # 'loss/_' for tf operations within the scope         
+        # Loss = aspect_ + opinion_ + sentiment_ + regularization weight * regularization cost + consistency weight * consistency_cost
+        # 'loss/_' for tf nodes within the scope         
         with tf.name_scope('loss'):
             tv = tf.trainable_variables() # Variables cosntructed by Variable(trainable = True), added to the collection GraphKeys.TRAINABLE_VARIABLES
             total_para = count_parameter()
             self.logger.info('>>> total parameter: {}'.format(total_para))
 
-            aspect_cost = tf.reduce_mean(
-                tf.nn.softmax_cross_entropy_with_logits(logits=aspect_prob, labels=tf.cast(aspect_label, tf.float32)))
-            opinion_cost = tf.reduce_mean(
-                tf.nn.softmax_cross_entropy_with_logits(logits=opinion_prob, labels=tf.cast(opinion_label, tf.float32)))
-            sentiment_cost = tf.reduce_mean(
-                tf.nn.softmax_cross_entropy_with_logits(logits=sentiment_prob, labels=tf.cast(sentiment_label, tf.float32)))
+            aspect_cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=aspect_prob, labels=tf.cast(aspect_label, tf.float32)))
+            opinion_cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=opinion_prob, labels=tf.cast(opinion_label, tf.float32)))
+            sentiment_cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=sentiment_prob, labels=tf.cast(sentiment_label, tf.float32)))
+            consistency_cost = tf.reduce_mean(self.kl_for_log_probs(ae_us, ae_aug)) + tf.reduce_mean(self.kl_for_log_probs(oe_us, oe_aug)) + tf.reduce_mean(self.kl_for_log_probs(sc_us, sc_aug))
+            cost = aspect_cost + opinion_cost + sentiment_cost + self.opt.reg_scale * reg_cost + self.opt.uda_scale * consistency_cost
 
-            cost = aspect_cost + opinion_cost + sentiment_cost + self.opt.reg_scale * reg_cost
-        
         # 'train/_' for tf operations within the scope
         with tf.name_scope('train'):
             global_step = tf.Variable(0, name="tr_global_step", trainable=False)
@@ -247,7 +312,11 @@ class MODEL(object):
 
             # Load dataset
             train_sets = read_data(self.opt.train_path, self.word_id_mapping, self.opt.max_sentence_len)
-            dev_sets = read_data(self.opt.dev_path, self.word_id_mapping, self.opt.max_sentence_len)
+            dev_sets = read_data(self.opt.dev_path, self.word_id_mapping, self.opt.max_sentence_len)            
+            unsup_sets = read_data(self.opt.unsup_train_path, self.word_id_mapping, self.opt.max_sentence_len)
+            unsup_dev_sets = read_data(self.opt.unsup_dev_path, self.word_id_mapping, self.opt.max_sentence_len)
+            aug_sets = read_data(self.opt.aug_train_path, self.word_id_mapping, self.opt.max_sentence_len)
+            aug_dev_sets = read_data(self.opt.aug_dev_path, self.word_id_mapping, self.opt.max_sentence_len)
             test_sets = read_data(self.opt.test_path, self.word_id_mapping, self.opt.max_sentence_len, is_testing=True)
 
             aspect_f1_list = []
@@ -271,7 +340,7 @@ class MODEL(object):
                     epoch_start = time.time()
                     # train : feed dictionary
                     # num : size of data
-                    for train, num in self.get_batch_data(train_sets, self.opt.batch_size, self.opt.kp1, self.opt.kp2, True, True):
+                    for train, num in self.get_batch_data(train_sets, self.opt.batch_size, self.opt.kp1, self.opt.kp2, unsup_sets, aug_sets, True, True):
                         tr_eloss, tr_aeloss, tr_oeloss, tr_seloss, tr_reloss, _, step = sess.run(
                         [cost, aspect_cost, opinion_cost, sentiment_cost, reg_cost, optimizer, global_step], feed_dict=train)
                         tr_loss += tr_eloss * num
@@ -291,7 +360,7 @@ class MODEL(object):
                 final_mask = []
                 # test : feed dictionary
                 # _ : size of data
-                for test, _ in self.get_batch_data(test_sets, 200, 1.0, 1.0):
+                for test, _ in self.get_batch_data_test(test_sets, 200, 1.0, 1.0):
                     _step, t_ay, p_ay, t_oy, p_oy, t_sy, p_sy, e_mask = sess.run(
                         [global_step, true_ay, pred_ay, true_oy, pred_oy, true_sy, pred_sy, self.word_mask], feed_dict=test)
                     a_preds.extend(p_ay)
@@ -323,7 +392,7 @@ class MODEL(object):
                 dev_final_mask = []
                 # train : feed dictionary
                 # num : size of data                
-                for dev, num in self.get_batch_data(dev_sets, 200, 1.0, 1.0):
+                for dev, num in self.get_batch_data(dev_sets, 200, 1.0, 1.0, unsup_dev_sets, aug_dev_sets):
                     dev_eloss, dev_aeloss, dev_oeloss, dev_seloss, dev_reloss, _step, dev_t_ay, dev_p_ay, dev_t_oy, dev_p_oy, dev_t_sy, dev_p_sy, dev_e_mask = \
                         sess.run([cost, aspect_cost, opinion_cost, sentiment_cost, reg_cost, global_step, true_ay, pred_ay, true_oy, pred_oy, true_sy, pred_sy, self.word_mask],
                                  feed_dict=dev)
@@ -385,12 +454,51 @@ class MODEL(object):
                           sentiment_acc_list[min_dev_index],
                           sentiment_f1_list[min_dev_index], ABSA_f1_list[min_dev_index]))
 
-    def get_batch_data(self, dataset, batch_size, keep_prob1, keep_prob2, is_training=False, is_shuffle=False):
+    def get_batch_data(self, dataset, batch_size, keep_prob1, keep_prob2, dataset_unsup, dataset_aug, is_training=False, is_shuffle=False):
+        length = len(dataset[0])
+        length_unsup = len(dataset_unsup[0])
+        batch_num = int(length / batch_size) + (1 if length % batch_size else 0)
+        batch_size_unsup = batch_size * self.opt.unsup_ratio      
+        all_index = np.arange(length)
+        all_index_unsup = np.arange(length_unsup) 
+        
+        if is_shuffle:
+            np.random.shuffle(all_index)
+        # loop, (dataset_size / batch_size) times
+        for i in range(int(length / batch_size) + (1 if length % batch_size else 0)):
+            feed_dict = {}
+            index = all_index[i * batch_size:(i + 1) * batch_size]
+            index_u = all_index_unsup[i * batch_size_unsup:(i + 1) * batch_size_unsup]
+
+            #### Unsup. ####       
+            feed_dict.update({
+                self.unsup: dataset_unsup[0][index_u],
+                self.aug: dataset_aug[0][index_u],
+                self.unsup_mask: dataset[4][index_u],
+                self.position_unsup : dataset_unsup[6][index_u],
+                self.senti_mask_unsup: dataset_unsup[5][index_u]
+            })                
+            
+            #### Sup. ####            
+            feed_dict.update({
+                self.x: dataset[0][index],
+                self.aspect_y: dataset[1][index],
+                self.opinion_y: dataset[2][index],
+                self.sentiment_y: dataset[3][index],
+                self.word_mask: dataset[4][index],
+                self.senti_mask: dataset[5][index],
+                self.position: dataset[6][index],
+                self.keep_prob1: keep_prob1,
+                self.keep_prob2: keep_prob2,
+                self.is_training: is_training,
+            })
+            yield feed_dict, len(index)
+
+    def get_batch_data_test(self, dataset, batch_size, keep_prob1, keep_prob2, is_training=False, is_shuffle=False):
         length = len(dataset[0])
         all_index = np.arange(length)
         if is_shuffle:
             np.random.shuffle(all_index)
-        # loop, (dataset_size / batch_size) times
         for i in range(int(length / batch_size) + (1 if length % batch_size else 0)):
             index = all_index[i * batch_size:(i + 1) * batch_size]
             feed_dict = {
@@ -405,4 +513,4 @@ class MODEL(object):
                 self.keep_prob2: keep_prob2,
                 self.is_training: is_training,
             }
-            yield feed_dict, len(index)
+            yield feed_dict, len(index)    

@@ -14,8 +14,8 @@ SEED = 123
 # Set random seed
 from numpy.random import seed
 seed(SEED)
-from tensorflow.random import set_seed
-set_seed(SEED)
+from tensorflow.random import set_random_seed
+set_random_seed(SEED)
 
 # Set namespace opt
 # 1. Command line arguments
@@ -32,6 +32,10 @@ parser.add_argument('--reg_scale', default=1e-5, type=float, help='coefficient o
 parser.add_argument('--filter_num', default=256, type=int, help='filter numbers')
 parser.add_argument('--class_num', default=3, type=int, help='class number')
 parser.add_argument('--load', default=0, type=int, help='load an existing checkpoint')
+
+##### Unsup #####
+parser.add_argument('--unsup_ratio', default=0, type=float, help='unsupervised dataset ratio')
+parser.add_argument('--uda_scale', default=0, type=float, help='coefficient of consistency')
 opt = parser.parse_args()
 
 # Set dictionary of 
@@ -60,6 +64,13 @@ opt.data_path = 'data/{}/'.format(opt.task)
 opt.train_path = 'data/{}/train/'.format(opt.task)
 opt.test_path = 'data/{}/test/'.format(opt.task)
 opt.dev_path = 'data/{}/dev/'.format(opt.task)
+
+##### Unsupervised #####
+opt.unsup_train_path = 'data/{}/train/'.format(opt.task)
+opt.unsup_dev_path = 'data/{}/train/'.format(opt.task)
+opt.aug_train_path = 'data/{}/train/'.format(opt.task)
+opt.aug_dev_path = 'data/{}/train/'.format(opt.task)
+
 
 # Main
 def main(_):
